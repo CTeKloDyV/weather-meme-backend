@@ -30,9 +30,8 @@ function setCachedWeather(city, data) {
 }
 const PORT = process.env.PORT || 5000;
 
-// CORS — разрешаем фронтенду
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: 'https://weather-meme-frontend.vercel.app', // ← URL твоего фронтенда
     credentials: true
 }));
 
