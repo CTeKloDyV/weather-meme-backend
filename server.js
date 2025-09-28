@@ -10,7 +10,7 @@ const multer = require('multer');
 const { getMemeByTemp } = require('./utils/getMemeByTemp');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT;
 
 // Кэш
 const weatherCache = new Map();
