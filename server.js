@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -10,9 +9,9 @@ const multer = require('multer');
 const { getMemeByTemp } = require('./utils/getMemeByTemp');
 
 const app = express();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 5000;
 
-// Кэш
+// === Кэш ===
 const weatherCache = new Map();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 минут
 
@@ -25,11 +24,11 @@ function setCachedWeather(city, data) {
     weatherCache.set(city, { data, timestamp: Date.now() });
 }
 
-// CORS — разрешаем только фронтенд
+// === CORS ===
 const FRONTEND_URL = 'https://weather-meme-frontend.vercel.app';
 app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 
-// Статика
+// === Статика ===
 app.use('/images', express.static(path.join(__dirname, 'public/images'), {
     setHeaders: (res, filepath) => {
         if (/\.(jpg|jpeg|png)$/i.test(filepath)) {
@@ -40,7 +39,7 @@ app.use('/images', express.static(path.join(__dirname, 'public/images'), {
 
 app.use(express.json());
 
-// Multer
+// === Multer ===
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const dir = path.join(__dirname, 'public/images');
@@ -61,7 +60,9 @@ const upload = multer({
     }
 });
 
-// Роуты
+// === Роуты ===
+
+// Погода + мем
 app.get('/weather', async (req, res) => {
     const { city } = req.query;
     if (!city) return res.status(400).json({ error: 'Город не указан' });
@@ -99,6 +100,7 @@ app.get('/weather', async (req, res) => {
     }
 });
 
+// Добавить мем
 app.post('/memes', upload.single('image'), (req, res) => {
     const { category, text } = req.body;
     const file = req.file;
@@ -114,13 +116,14 @@ app.post('/memes', upload.single('image'), (req, res) => {
         if (!memes[category]) memes[category] = [];
         memes[category].push({ image: imagePath, text });
         fs.writeFileSync(memesPath, JSON.stringify(memes, null, 2));
-        res.json({ success: true, message: 'Мем добавлен', imagePath });
+        res.json({ success: true, message: 'Мем добавлен' });
     } catch (err) {
         console.error('Ошибка сохранения мема:', err);
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
 
+// Удалить мем
 app.delete('/memes/:category/:index', (req, res) => {
     const { category, index } = req.params;
     const idx = parseInt(index, 10);
@@ -146,6 +149,7 @@ app.delete('/memes/:category/:index', (req, res) => {
     }
 });
 
+// Получить все мемы (для админки)
 app.get('/memes-list', (req, res) => {
     try {
         const memesPath = path.join(__dirname, 'data/memes.json');
@@ -156,6 +160,7 @@ app.get('/memes-list', (req, res) => {
     }
 });
 
+// === Запуск ===
 if (require.main === module) {
     app.listen(PORT, () => {
         console.log(`✅ Бэкенд запущен на порту ${PORT}`);
