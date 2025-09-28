@@ -1,3 +1,4 @@
+// server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -6,91 +7,65 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 
-// Импорт логики мемов
 const { getMemeByTemp } = require('./utils/getMemeByTemp');
 
 const app = express();
-// Кэш погоды: { "Moscow": { data, timestamp } }
+const PORT = process.env.PORT || 5000;
+
+// Кэш
 const weatherCache = new Map();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 минут
 
 function getCachedWeather(city) {
     const cached = weatherCache.get(city);
-    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-        return cached.data;
-    }
-    return null;
+    return (cached && Date.now() - cached.timestamp < CACHE_DURATION) ? cached.data : null;
 }
 
 function setCachedWeather(city, data) {
-    weatherCache.set(city, {
-        data,
-        timestamp: Date.now()
-    });
+    weatherCache.set(city, { data, timestamp: Date.now() });
 }
-const PORT = process.env.PORT || 5000;
 
-app.use(cors({
-    origin: 'https://weather-meme-frontend.vercel.app', // ← URL твоего фронтенда
-    credentials: true
-}));
+// CORS — разрешаем только фронтенд
+const FRONTEND_URL = 'https://weather-meme-frontend.vercel.app';
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 
-app.use(express.static(path.join(__dirname, 'public'), {
-    setHeaders: (res, path) => {
-        if (/\.(jpg|jpeg|png|gif)$/i.test(path)) {
-            res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3000');
-        }
-    }
-}));
+// Статика
 app.use('/images', express.static(path.join(__dirname, 'public/images'), {
-    setHeaders: (res, path) => {
-        if (path.endsWith('.jpg') || path.endsWith('.png') || path.endsWith('.jpeg')) {
-            res.setHeader('Access-Control-Allow-Origin', 'https://weather-meme-frontend.vercel.app');
+    setHeaders: (res, filepath) => {
+        if (/\.(jpg|jpeg|png)$/i.test(filepath)) {
+            res.setHeader('Access-Control-Allow-Origin', FRONTEND_URL);
         }
     }
 }));
-// Для парсинга JSON
+
 app.use(express.json());
 
-// Настройка multer для загрузки файлов
+// Multer
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const uploadDir = path.join(__dirname, 'public/images');
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
-        cb(null, uploadDir);
+        const dir = path.join(__dirname, 'public/images');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
     },
     filename: (req, file, cb) => {
         const ext = path.extname(file.originalname);
-        const uniqueName = `${Date.now()}${ext}`;
-        cb(null, uniqueName);
+        cb(null, `${Date.now()}${ext}`);
     }
 });
 
 const upload = multer({
     storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5 МБ
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Только изображения!'), false);
-        }
+        cb(null, file.mimetype.startsWith('image/'));
     }
 });
 
-// Логируем API-ключ при старте
-console.log('API Key:', process.env.OPENWEATHER_API_KEY);
-
-// Роут: получение погоды + мема
+// Роуты
 app.get('/weather', async (req, res) => {
     const { city } = req.query;
-    if (!city) {
-        return res.status(400).json({ error: 'Город не указан' });
-    }
+    if (!city) return res.status(400).json({ error: 'Город не указан' });
 
-    // Проверка кэша
     const cached = getCachedWeather(city);
     if (cached) {
         console.log(`✅ Кэш использован для: ${city}`);
@@ -98,105 +73,71 @@ app.get('/weather', async (req, res) => {
     }
 
     try {
-        const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?q=${city}&units=metric&lang=ru&appid=${process.env.OPENWEATHER_API_KEY}`;
-        const response = await axios.get(weatherUrl);
+        const url = `https://api.openweathermap.org/data/2.5/weather?q=${city}&units=metric&lang=ru&appid=${process.env.OPENWEATHER_API_KEY}`;
+        const response = await axios.get(url);
         const data = response.data;
 
-        const baseUrl = `http://localhost:${PORT}`;
+        const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
         const result = {
             city: data.name,
             temperature: Math.round(data.main.temp),
             description: data.weather[0].description,
             icon: data.weather[0].icon,
-            wind: {
-                speed: data.wind?.speed || 0,
-                deg: data.wind?.deg || 0
-            },
-            main: {
-                humidity: data.main?.humidity || null,
-                pressure: data.main?.pressure || null
-            },
+            wind: { speed: data.wind?.speed || 0, deg: data.wind?.deg || 0 },
+            main: { humidity: data.main?.humidity || null },
             timezone: data.timezone,
             dt: data.dt,
             meme: getMemeByTemp(Math.round(data.main.temp), baseUrl)
         };
 
-        // Сохраняем в кэш
         setCachedWeather(city, result);
         res.json(result);
     } catch (error) {
         console.error('Ошибка OpenWeatherMap:', error.message);
-        if (error.response?.status === 404) {
-            return res.status(404).json({ error: 'Город не найден' });
-        }
+        if (error.response?.status === 404) return res.status(404).json({ error: 'Город не найден' });
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
 
-// Роут: добавление мема (админка)
 app.post('/memes', upload.single('image'), (req, res) => {
     const { category, text } = req.body;
     const file = req.file;
-
-    if (!category || !text) {
-        return res.status(400).json({ error: 'Категория и текст обязательны' });
-    }
-    if (!file) {
-        return res.status(400).json({ error: 'Изображение обязательно' });
+    if (!category || !text || !file) {
+        return res.status(400).json({ error: 'Категория, текст и изображение обязательны' });
     }
 
     try {
         const imagePath = `/images/${file.filename}`;
         const memesPath = path.join(__dirname, 'data/memes.json');
         let memes = {};
-
-        if (fs.existsSync(memesPath)) {
-            memes = JSON.parse(fs.readFileSync(memesPath, 'utf8'));
-        }
-
+        if (fs.existsSync(memesPath)) memes = JSON.parse(fs.readFileSync(memesPath, 'utf8'));
         if (!memes[category]) memes[category] = [];
         memes[category].push({ image: imagePath, text });
-
         fs.writeFileSync(memesPath, JSON.stringify(memes, null, 2));
         res.json({ success: true, message: 'Мем добавлен', imagePath });
     } catch (err) {
         console.error('Ошибка сохранения мема:', err);
-        res.status(500).json({ error: 'Ошибка сервера при сохранении' });
+        res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
-// Удаление мема по индексу и категории
+
 app.delete('/memes/:category/:index', (req, res) => {
     const { category, index } = req.params;
     const idx = parseInt(index, 10);
-
-    if (isNaN(idx)) {
-        return res.status(400).json({ error: 'Неверный индекс' });
-    }
+    if (isNaN(idx)) return res.status(400).json({ error: 'Неверный индекс' });
 
     try {
         const memesPath = path.join(__dirname, 'data/memes.json');
-        let memes = {};
+        const memes = fs.existsSync(memesPath) ? JSON.parse(fs.readFileSync(memesPath, 'utf8')) : {};
+        if (!memes[category] || memes[category].length <= idx) return res.status(404).json({ error: 'Мем не найден' });
 
-        if (fs.existsSync(memesPath)) {
-            memes = JSON.parse(fs.readFileSync(memesPath, 'utf8'));
-        }
-
-        if (!memes[category] || memes[category].length <= idx) {
-            return res.status(404).json({ error: 'Мем не найден' });
-        }
-
-        // Удаляем файл изображения (опционально)
         const imagePath = memes[category][idx].image;
         if (imagePath.startsWith('/images/')) {
             const fullPath = path.join(__dirname, 'public', imagePath);
-            if (fs.existsSync(fullPath)) {
-                fs.unlinkSync(fullPath);
-            }
+            if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
         }
 
-        // Удаляем мем из массива
         memes[category].splice(idx, 1);
-
         fs.writeFileSync(memesPath, JSON.stringify(memes, null, 2));
         res.json({ success: true, message: 'Мем удалён' });
     } catch (err) {
@@ -204,23 +145,20 @@ app.delete('/memes/:category/:index', (req, res) => {
         res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
-// Получить все мемы (для админки)
+
 app.get('/memes-list', (req, res) => {
     try {
         const memesPath = path.join(__dirname, 'data/memes.json');
-        let memes = {};
-        if (fs.existsSync(memesPath)) {
-            memes = JSON.parse(fs.readFileSync(memesPath, 'utf8'));
-        }
+        const memes = fs.existsSync(memesPath) ? JSON.parse(fs.readFileSync(memesPath, 'utf8')) : {};
         res.json(memes);
     } catch (err) {
         res.status(500).json({ error: 'Ошибка загрузки мемов' });
     }
 });
-// Экспорт для тестов
+
 if (require.main === module) {
     app.listen(PORT, () => {
-        console.log(`✅ Бэкенд запущен на http://localhost:${PORT}`);
+        console.log(`✅ Бэкенд запущен на порту ${PORT}`);
     });
 }
 
