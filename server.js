@@ -42,7 +42,13 @@ app.use(express.static(path.join(__dirname, 'public'), {
         }
     }
 }));
-
+app.use('/images', express.static(path.join(__dirname, 'public/images'), {
+    setHeaders: (res, path) => {
+        if (path.endsWith('.jpg') || path.endsWith('.png') || path.endsWith('.jpeg')) {
+            res.setHeader('Access-Control-Allow-Origin', 'https://weather-meme-frontend.vercel.app');
+        }
+    }
+}));
 // Для парсинга JSON
 app.use(express.json());
 
